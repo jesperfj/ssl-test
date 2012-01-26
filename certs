@@ -1,0 +1,127 @@
+#!/bin/bash
+
+CLOUD=https://api.heroku.com
+SSLDOMAIN=herokussl.com
+
+if [ -z "$APIKEY" ] ; then
+    APIKEY=`tail -1 $HOME/.heroku/credentials`
+#	echo "You must set your API key in the APIKEY environment variable"
+#	exit 1
+fi
+
+list() {
+    curl -k -H "Accept: application/json" -A "heroku-gem" -u ":$APIKEY" -X GET $CLOUD/v3/apps/$APP/ssl_endpoints/
+	echo
+}
+
+create() {
+    curl -k -H "Accept: application/json" -A "heroku-gem" -u ":$APIKEY" -X POST $CLOUD/v3/apps/$APP/ssl_endpoints/ --data-urlencode "key@$KEYFILE" --data-urlencode "pem@$CRTFILE"
+	echo
+}
+
+update() {
+    curl -k -H "Accept: application/json" -A "heroku-gem" -u ":$APIKEY" -X PUT $CLOUD/v3/apps/$APP/ssl_endpoints/$ENDPOINT --data-urlencode "key@$KEYFILE" --data-urlencode "pem@$CRTFILE"
+	echo
+}
+
+delete() {
+    curl -k -H "Accept: application/json" -A "heroku-gem" -u ":$APIKEY" -X DELETE $CLOUD/v3/apps/$APP/ssl_endpoints/$ENDPOINT
+	echo
+}
+
+rollback() {
+    curl -k -H "Accept: application/json" -A "heroku-gem" -u ":$APIKEY" -X POST $CLOUD/v3/apps/$APP/ssl_endpoints/$ENDPOINT/rollback -d "a=b"
+	echo
+}
+
+testcert() {
+    echo "Generating a test cert and key..."
+    openssl genrsa -out server.key 2048 &> /dev/null    
+    openssl req -new -key server.key -out server.csr -batch -subj "/C=US/ST=CA/O=$ORG_NAME/CN=$DOMAIN_NAME" &> /dev/null
+    openssl x509 -req -days 365 -in server.csr -signkey server.key -out server.crt &> /dev/null
+    rm server.csr
+    echo "Done. Upload with:"
+    echo "$0 create server.key server.crt"
+}
+
+usage() {
+	cat <<EOF
+Usage: $0 COMMAND [parameters] -a APP
+
+Commands:
+
+  list                         # See cert details
+  create KEY CRT               # Upload a new cert
+  update KEY CRT [-e ENDPOINT] # Update cert
+  rollback [-e ENDPOINT]       # Rollback to the previous cert
+  delete [-e ENDPOINT]         # Delete cert
+  testcert DOMAIN [ -o ORG]    # Generate a test cert (self-signed) for DOMAIN
+
+Note, Before setting up a cert you must:
+- Add the ssl-endpoint add-on to your app with "heroku addons:add ssl-endpoint"
+- Add the domain for your cert to your app with "heroku domains:add DOMAIN"
+
+EOF
+}
+
+
+CMD=$1
+shift
+case $CMD in 
+create|update)
+	KEYFILE=$1
+	shift
+	CRTFILE=$1
+	shift
+	if [ ! -e $KEYFILE ] ; then
+		echo "Error: $KEYFILE does not exist"
+		usage
+		exit 1
+	fi
+	if [ ! -e $CRTFILE ] ; then
+		echo "Error: $CRTFILE does not exist"
+		usage
+		exit 1
+	fi
+	;;
+testcert)
+    DOMAIN_NAME=$1
+    ORG_NAME="Acme, Inc"
+    shift
+    while getopts "o:" opt; do
+        case $opt in
+        o)
+            ORG_NAME=$OPTARG
+            ;;
+        esac
+    done
+    ;;
+list|rollback|delete)
+	;;
+*)
+	usage
+    exit 1
+	;;
+esac
+
+while getopts "a:e:" opt; do
+	case $opt in
+		a)
+			APP=$OPTARG
+			;;
+		e)
+			ENDPOINT=`echo "$OPTARG.$SSLDOMAIN" | sed s/\\\./%2E/g`
+			;;
+	esac
+done
+
+
+if [ -z "$APP" ] && [ "$CMD" != "testcert" ] ; then
+	echo "Error: You must specify the app name with the -a option"
+	usage
+	exit 1
+fi
+
+$CMD
+
+
